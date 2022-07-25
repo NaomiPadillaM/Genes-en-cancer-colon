@@ -5,7 +5,7 @@ En este proyecto colaborativo se realizó un análisis de Microarray de la expre
  
 Se utilizó el lenguaje R y en el Notebook es posible apreciar el tratamiento y análisis estadístico de muestras de pacientes de diferente raza y edades con cáncer de colon. Las bases de datos utilizadas se obtuvieron de *Geo Datasets*
 
-<img src= "images/interacciongenes.png" width=50% height=50%>
+<img src= "images/interacciongenes.png" width=40% height=40%>
 
 Encontraremos en el pdf el desarrollo del proyecto desde sus inicios como el análisis e interpretación de los resultados. 
 
