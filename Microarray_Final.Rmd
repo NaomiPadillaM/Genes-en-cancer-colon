@@ -1,0 +1,351 @@
+---
+title: "Lectura y Análisis de Microarray"
+output:
+  html_document:
+    df_print: paged
+---
+## 1. Configuración del entorno
+
+Para este análisis, primero de se deben leer los datos, y para esto, 
+primero hay que instalar y cargar las librerías necesarias
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+# Sólo correr este chunk si no se han instalado los paquetes
+if (!requireNamespace("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GEOquery")
+BiocManager::install("limma")
+```
+
+```{r}
+library(GEOquery)
+library(limma)
+library(dplyr)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## 2. Lectura del Conjunto de datos
+
+Para leer el conjunto de datos, es necesario saber su código, que comienza con GSE. En este análisis usaremos el [GSE31595](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE31595).
+Y además, se debe elegir su plataforma, aunque para este caso, sólo se tiene una: GPL570
+```{r}
+gset <- getGEO("GSE31595", GSEMatrix =TRUE, AnnotGPL=TRUE)
+if (length(gset) > 1) idx <- grep("GPL570", attr(gset, "names")) else idx <- 1
+gset <- gset[[idx]]
+```
+
+## 3. Obtención de datos de expresión
+
+Una vez obtenida toda la información del dataset, sólo se usaron los valores de expresión
+de los genes. Valores que fueron guardados como un data frame. Obteniendo así los valores de
+expresión para 54,675 sondas.
+```{r}
+V_ex <- exprs(gset)
+V_ex <- as.data.frame(V_ex)
+```
+
+## 4. Selección de muestras
+
+Para este análisis, se filtraron las muestras para agruparlas en 4 grupos distintos 
+con 5 muestras cada uno:
+
+1) Adultos (Jóvenes) de 51 a 71 años con cáncer de colon en etapa II.
+
+2) Adultos (Grandes) de 72 a 91 años con cáncer de colon en etapa II.
+
+3) Adultos (Jóvenes) de 51 a 71 años con cáncer de colon en etapa III.
+
+4) Adultos (Grandes) de 72 a 91 años con cáncer de colon en etapa III.
+
+```{r}
+microarray<- cbind(V_ex$GSM784850,V_ex$GSM784884,V_ex$GSM784860,V_ex$GSM784871,V_ex$GSM784858,
+                   V_ex$GSM784890,V_ex$GSM782674,V_ex$GSM784852,V_ex$GSM784867,V_ex$GSM784887,
+                   V_ex$GSM784875,V_ex$GSM784878,V_ex$GSM782671,V_ex$GSM784856,V_ex$GSM784865,
+                   V_ex$GSM784881,V_ex$GSM784873,V_ex$GSM784886,V_ex$GSM784889,V_ex$GSM784851)
+microarray<- data.frame(microarray)
+colnames(microarray)<- c("E2_J_1","E2_J_2","E2_J_3","E2_J_4","E2_J_5",
+                         "E2_G_1","E2_G_2","E2_G_3","E2_G_4","E2_G_5",
+                         "E3_J_1","E3_J_2","E3_J_3","E3_J_4","E3_J_5",
+                         "E3_G_1","E3_G_2","E3_G_3","E3_G_4","E3_G_5")
+```
+
+## 5. Obtener el nombre de los genes
+
+Se obtuvieron los símbolos de los genes a los que estaban asociados los valores de expresión,
+eliminando los valores de expresión sin un gen asignado y el de los genes duplicados. Obteniendo así
+los valores de expresión para 22,189 genes.
+
+```{r}
+probes <- getEAWP(gset)$probes
+genes<- probes$`Gene symbol`
+genes[genes==""] <- NA
+microarray<- cbind(genes,microarray)
+microarray<- na.omit(microarray)
+duplicados<- duplicated(microarray$genes)
+microarray<-microarray[!duplicados,]
+row.names(microarray)<-microarray$genes
+microarray$genes<- NULL
+```
+
+## 6. Normalizacion
+
+Se normalizaron los datos usando una desviación estándar de 2 y eliminando los valores
+alejados a 0.02
+
+```{r}
+raw_means = apply(microarray,2,mean,trim=0.02)
+microarray_norm = sweep(microarray, 2, raw_means, "/") * 100
+```
+
+## 7. Cálculo de Medias
+Se obtuvieron las medias de los valores de expresión de cada gen para cada grupo,
+y además, se agruparon en un sólo data frame
+
+```{r}
+E2_J_mean = rowMeans(microarray_norm[,1:5])
+E3_J_mean = rowMeans(microarray_norm[,11:15])
+E2_G_mean = rowMeans(microarray_norm[,6:10])
+E3_G_mean = rowMeans(microarray_norm[,16:20])
+microarray_means = data.frame(E2_J_mean, E3_J_mean, E2_G_mean, E3_G_mean)
+```
+
+## 8. Proporciones 
+
+Se calcularon las proporciones (o ratios) de las medias de los valores de epxresión.
+Para este análisis se calcularon 2 proporciones, una de adultos jóvenes y otra para adultos grandes,
+donde el denominador fueron las medias de los valores de expresión de los genes en etapa II, 
+y el dividendo las medias de los valores de expresión de los genes en etapa III.
+
+O en otras palabras, se calculó la proporción de expresión de los genes en Etapa II contra
+los genes en Etapa III para los adultos jóvenes y para los adultos grandes
+
+```{r}
+J_ratios = microarray_means$E2_J_mean / microarray_means$E3_J_mean
+G_ratios = microarray_means$E2_G_mean / microarray_means$E3_G_mean
+microarray_ratios = data.frame(J_ratios, G_ratios)
+row.names(microarray_ratios) = row.names(microarray)
+```
+
+
+## 9. Cambio a Log2
+
+Para este análisis, los valores normalizados, los promedios y las proporciones
+se cambiaron a Logaritmo base 2 para poder observar en una mejor escala las relaciones
+entre los genes
+
+```{r}
+microarray_norm = log2(microarray_norm)
+microarray_means = log2(microarray_means)
+microarray_ratios = log2(microarray_ratios)
+```
+
+## 10. t-test
+
+Se realizó una t-test para realizar hipótesis sobre si un gen se expresa más en un grupo que
+en otro. Obteniendo así los p-value de cada gen para cada grupo
+
+```{r}
+get_pvalue <- function(values, idx1, idx2) {
+  return(t.test(values[idx1], values[idx2])$p.value)
+}
+J_p = apply(microarray_norm, 1, get_pvalue, 1:5, 11:15)
+G_p = apply(microarray_norm, 1, get_pvalue, 6:10, 16:20)
+```
+
+## 11. Selección de genes con p-value < 0.05
+
+Dado que todos los grupos son de muestras con cáncer, las muestras en sí no presentan muchas
+diferencias entre sí, por lo tanto, se eligieron aquellos genes con un p-value un poco menos estricto de: 0.05
+
+Es decir, si el p-value era menor a 0.05, se rechazaba la hipótesis nula y se admite que un gen se
+expresa más en un grupo que en otro.
+
+Y con esto se obtuvieron 936 genes para los adultos Grandes, y 783 genes para los adultos jóvenes, 
+cuyo p-value fue menor a 0.05
+
+```{r}
+filtered_J_p = J_p[J_p < 0.05]
+filtered_G_p = G_p[G_p < 0.05]
+```
+
+## 12. Selección de genes en ambos grupos
+
+Una vez obbtenidos todos estos genes con p-value menor a 0.05, con el fin de acortar esta lista
+y encontrar cuáles genes están presentes en ambos grupos, se filtaron los genes que estuvieran
+presentes en ambos grupos. Obteniendo así 46 genes.
+
+```{r}
+filtered_probes = sort(intersect(names(filtered_J_p), names(filtered_G_p)))
+microarray_selection = microarray_means[filtered_probes,]
+microarray_selection_ratios = microarray_ratios[filtered_probes,]
+print(filtered_probes)
+```
+
+## 13. Gráficas
+
+Para Visualizar y comprender esta gran cantidad de datos, se realizaron diferentes tipos de gráficas
+
+## 13.1 Dendograma
+
+Este gráfico muestra la agrupación (clustering) de los genes al analizar cómo se parecen entre
+sí los valores de expresión de los mismo
+
+```{r}
+medias <- rowMeans(microarray_selection)
+devs = apply(microarray_selection, 1, sd)
+
+centered_microarray_selection = sweep(microarray_selection, 1, medias)
+centered_microarray_selection = sweep(centered_microarray_selection, 1, devs, "/")
+
+names(centered_microarray_selection) = c("II_J", "III_J", "II_G", "III_G")
+hclustering = hclust(dist(centered_microarray_selection))
+
+plot(hclustering)
+names(microarray_selection) = c("II_J", "III_J", "II_G", "III_G")
+```
+
+## 13.2 Mapa de Calor
+
+A partir de la agrupación generada con el dendograma, el mapa de calor muestra mediante
+colores el grado en que se expresan los genes, donde si es más rojo, más se expresan, y
+si son más amarillos, menos se expresan. 
+
+Esto nos ayuda a distinguir los genes que se expresan en los 4 grupos y así comprobar si
+tienen una expresión similar.
+
+```{r}
+heatmap(as.matrix(centered_microarray_selection), Colv = NA)
+```
+
+## 13.3 Gráfico de dispersión para Adultos Jóvenes
+
+Este gráfico indica las diferencias de proporción de los valores de expresión
+de los genes en adultos jóvenes. Los valores alejados hacia abajo de la línea roja
+indican una expresión mayor en los adultos jóvenes con cáncer de Colon en etapa II, y 
+los valores alejados hacia arriba de la línea roja indican una expresión mayor en los
+adultos jóvenes con cáncer de Colon en etapa III. 
+
+```{r}
+plot(microarray_means$E2_J_mean, 
+     microarray_means$E3_J_mean, 
+     xlim = c(5,8), ylim = c(5,8),
+     xaxt="n", yaxt="n",
+     main = "Expresión en Adultos de 51 a 71 años: E-II vs E-III",
+     xlab = "E-II (log2 expression value)",
+     ylab = "E-III (log2 expression value")
+axis(1, at=seq(5,8,0.5))
+axis(2, at=seq(5,8,0.5))
+
+abline(lm(microarray_means$E3_J_mean ~ microarray_means$E2_J_mean),
+       col = "red")
+```
+
+## 13.4 Gráfico de dispersión para Adultos Grandes
+
+Este gráfico indica las diferencias de proporción de los valores de expresión
+de los genes en adultos grandes Los valores alejados hacia abajo de la línea roja
+indican una expresión mayor en los adultos grandes con cáncer de Colon en etapa II, y 
+los valores alejados hacia arriba de la línea roja indican una expresión mayor en los
+adultos grandes con cáncer de Colon en etapa III. 
+
+```{r}
+plot(microarray_means$E2_G_mean, 
+     microarray_means$E3_G_mean, 
+     xlim = c(5,8), ylim = c(5,8),
+     xaxt="n", yaxt="n",
+     main = "Expresión en Adultos de 72 a 91 años: E-II vs E-III",
+     xlab = "E-II (log2 expression value)",
+     ylab = "E-III (log2 expression value")
+axis(1, at=seq(5,8,0.5))
+axis(2, at=seq(5,8,0.5))
+
+abline(lm(microarray_means$E3_G_mean ~ microarray_means$E2_G_mean),
+       col = "red")
+```
+
+## 13.5 Gráfico R-I para Adultos Jóvenes
+
+Este gráfico muestra la correlación de los valores de expresión de los genes de
+los adultos jóvenes con cáncer de colon en etapa II y en etapa III. 
+Entre más alejados del 0 en el eje "y", hay una menor correlación entre ellos
+
+```{r}
+plot(microarray_means$E2_J_mean + microarray_means$E3_J_mean,
+     microarray_means$E2_J_mean - microarray_means$E3_J_mean,
+     main = "R-I plot para Adultos de 51 a 71 años: E-II vs E-III",
+     xlab = "log2(E-II * E-III)",
+     ylab = "log2(E-II / E-III)")
+```
+
+## 13.6 Gráfico R-I para Adultos Grandes
+
+Este gráfico muestra la correlación de los valores de expresión de los genes de
+los adultos grandes  con cáncer de colon en etapa II y en etapa III. 
+Entre más alejados del 0 en el eje "y", hay una menor correlación entre ellos
+
+```{r}
+plot(microarray_means$E2_G_mean + microarray_means$E3_G_mean,
+     microarray_means$E2_G_mean - microarray_means$E3_G_mean,
+     main = "R-I plot para Adultos de 72 a 91 años: E-II vs E-III",
+     xlab = "log2(E-II * E-III)",
+     ylab = "log2(E-II / E-III)")
+```
+
+## 13.7 Gráfico de Volcán para Adultos Jóvenes
+
+Este gráfico muestra la distribución de los valores de expresión de los genes de los
+adultos jóvenes en etapa II y III de cáncer de colon con base en su p-value y el 
+tamaño del efecto (proporción de los genes). En verde se muestran los valores con
+un p-value menor a 0.05 y los genes se expresen 1.4 más veces en las muestras con
+cáncer de colon en etapa II y en rojo se muestran los valores con un p-value menor a 0.05 
+y los genes se expresen 1.4 más veces en las muestras con cáncer de colon en etapa III
+
+```{r}
+efecto=log2(1.4)
+colores = rep(1, length(J_p))
+colores[J_p < 0.05 & microarray_ratios$J_ratios < -efecto] = 2
+colores[J_p < 0.05 & microarray_ratios$J_ratios > efecto] = 3
+
+plot(microarray_ratios$J_ratios,J_p, col = colores,
+     log = "y", ylim = rev(range(J_p)),
+     main = "Adultos de 51 a 71 años volcano plot",
+     xlab = "log2 expression ratio:  E-II vs E-III",
+     ylab = "p-value")
+```
+
+## 13.8 Gráfico de Volcán para Adultos Grandes
+
+Este gráfico muestra la distribución de los valores de expresión de los genes de los
+adultos grandes en etapa II y III de cáncer de colon con base en su p-value y el 
+tamaño del efecto (proporción de los genes). En verde se muestran los valores con
+un p-value menor a 0.05 y los genes se expresen 1.4 más veces en las muestras con
+cáncer de colon en etapa II y en rojo se muestran los valores con un p-value menor a 0.05 
+y los genes se expresen 1.4 más veces en las muestras con cáncer de colon en etapa III
+
+```{r}
+colores = rep(1, length(G_p))
+colores[G_p < 0.05 & microarray_ratios$G_ratios < -efecto] = 2
+colores[G_p < 0.05 & microarray_ratios$G_ratios > efecto] = 3
+
+plot(microarray_ratios$G_ratios,G_p, col = colores,
+     log = "y", ylim = rev(range(G_p)),
+     main = "Adultos de 72 a 91 años volcano plot",
+     xlab = "log2 expression ratio:  E-II vs E-III",
+     ylab = "p-value")
+```
+
+## 14. Selección de genes
+
+Finalmente, se seleccionaron los genes remarcados con color en los gráficos de volcán,
+es decir, aquellos que tuvieran un p-value menor a 0.05 y un tamaño del efecto mayor
+a 1.4.
+
+```{r}
+genes_expresion_J_II= names(J_p[J_p < 0.05 & microarray_ratios$J_ratios > efecto])
+genes_expresion_J_III= names(J_p[J_p < 0.05 & microarray_ratios$J_ratios < -efecto])
+genes_expresion_G_II= names(G_p[G_p < 0.05 & microarray_ratios$G_ratios > efecto])
+genes_expresion_G_III= names(G_p[G_p < 0.05 & microarray_ratios$G_ratios < -efecto])
+genes_seleccionados=c(genes_expresion_J_II,genes_expresion_J_III,genes_expresion_G_II,genes_expresion_G_III)
+print(genes_seleccionados)
+```
